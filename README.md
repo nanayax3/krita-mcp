@@ -85,6 +85,9 @@ If using a virtual environment:
 | `krita_stroke` | Paint a stroke through a list of [x, y] points |
 | `krita_fill` | Fill a circular area at a point |
 | `krita_draw_shape` | Draw rectangle, ellipse, or line |
+| `krita_draw_path` | Fill an SVG-style path with smooth Bezier curves |
+| `krita_create_vector_svg` | Create an editable vector layer from SVG/path data |
+| `krita_trace_image_to_vector` | Trace a low-color bitmap into editable SVG vector shapes |
 | `krita_get_canvas` | Export canvas to PNG (for AI to see progress) |
 | `krita_save` | Save canvas to a specific file path |
 | `krita_undo` / `krita_redo` | Undo/redo actions |
@@ -136,6 +139,21 @@ The plugin paints using **direct pixel manipulation** (not Krita's native brush 
 - This approach is reliable and doesn't depend on Krita's internal brush state
 
 The `set_brush` tool does set Krita's brush preset (for potential future use), but `stroke` currently uses its own pixel-level rendering.
+
+## Vector and Tracing Tools
+
+`krita_draw_path` fills SVG-style path data directly onto the active paint layer. This is useful for accurate raster fills from Bezier path data.
+
+`krita_create_vector_svg` creates a Krita vector layer from SVG markup or path data using Krita's vector import API. Shapes created this way can be selected and edited with Krita's vector tools.
+
+`krita_trace_image_to_vector` converts low-color bitmap artwork into editable vector shapes, then imports the generated SVG into Krita. It works best for icons, logos, UI buttons, and other flat-color artwork. It uses OpenCV for contour tracing when available, and falls back to a Pillow/NumPy horizontal-run tracer.
+
+Tracing caveats:
+
+- Text is traced as editable shapes, not as editable font text.
+- Gradients and antialiasing become multiple flat-color regions.
+- Low-resolution source images may still need manual cleanup in Krita.
+- Increase `colors` for more detail; increase `min_area` for cleaner output.
 
 ## License
 

@@ -1,2 +1,5 @@
 fastmcp
 httpx
+pillow
+numpy
+opencv-python

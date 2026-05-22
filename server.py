@@ -205,6 +205,119 @@ def krita_draw_shape(
 
 
 @mcp.tool()
+def krita_draw_path(
+    path: str,
+    color: Optional[str] = None,
+    x: int = 0,
+    y: int = 0,
+    scale: Optional[float] = None,
+    fit: Optional[dict] = None,
+    opacity: float = 1.0,
+    preserve_aspect: bool = True
+) -> str:
+    """
+    Draw a filled SVG-style path onto the active Krita layer.
+
+    Supports M, L, H, V, C, Q, and Z path commands, including relative
+    lowercase variants. Use either x/y/scale placement or a fit rectangle.
+
+    Args:
+        path: SVG path data, e.g. "M10 10 C20 0 40 0 50 10 Z"
+        color: Fill color as hex. If omitted, uses Krita's foreground color.
+        x: Left placement when fit is not supplied
+        y: Top placement when fit is not supplied
+        scale: Uniform scale when fit is not supplied
+        fit: Optional rectangle dict: {"x": 0, "y": 0, "width": 100, "height": 100}
+        opacity: Fill opacity from 0.0 to 1.0
+        preserve_aspect: Keep original aspect ratio when fitting
+    """
+    params = {
+        "path": path,
+        "x": x,
+        "y": y,
+        "opacity": opacity,
+        "preserve_aspect": preserve_aspect
+    }
+    if color is not None:
+        params["color"] = color
+    if scale is not None:
+        params["scale"] = scale
+    if fit is not None:
+        params["fit"] = fit
+
+    result = send_command("draw_path", params, timeout=120.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+
+    bounds = result.get("bounds", {})
+    return (
+        f"Drew path at ({bounds.get('x')}, {bounds.get('y')}) "
+        f"size {bounds.get('width')}x{bounds.get('height')}"
+    )
+
+
+@mcp.tool()
+def krita_create_vector_svg(
+    name: str = "Vector Layer",
+    svg: Optional[str] = None,
+    path: Optional[str] = None,
+    color: str = "#000000",
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    fill: Optional[str] = None,
+    stroke: str = "none",
+    stroke_width: float = 0,
+    transform: str = ""
+) -> str:
+    """
+    Create an editable Krita vector layer from SVG markup or one SVG path.
+
+    Args:
+        name: Name of the vector layer
+        svg: Full SVG markup to import as shapes
+        path: SVG path data to wrap in an SVG document
+        color: Default fill color for path mode
+        width: SVG width for path mode. Defaults to document width.
+        height: SVG height for path mode. Defaults to document height.
+        fill: Fill color for path mode. Defaults to color.
+        stroke: Stroke color for path mode, or "none"
+        stroke_width: Stroke width for path mode
+        transform: Optional SVG transform for the path, e.g. "translate(100 100) scale(2)"
+    """
+    if not svg and not path:
+        return "Error: Provide either svg or path"
+
+    params = {
+        "name": name,
+        "color": color,
+        "stroke": stroke,
+        "stroke_width": stroke_width,
+        "transform": transform,
+    }
+    if svg is not None:
+        params["svg"] = svg
+    if path is not None:
+        params["path"] = path
+    if width is not None:
+        params["width"] = width
+    if height is not None:
+        params["height"] = height
+    if fill is not None:
+        params["fill"] = fill
+
+    result = send_command("create_vector_svg", params, timeout=120.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+
+    return (
+        f"Created vector layer '{result.get('name')}' with "
+        f"{result.get('shape_count')} shape(s)"
+    )
+
+
+@mcp.tool()
 def krita_get_canvas(filename: str = "canvas.png") -> str:
     """
     Export current canvas to a PNG file and return the path.

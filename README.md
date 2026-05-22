@@ -85,6 +85,8 @@ If using a virtual environment:
 | `krita_stroke` | Paint a stroke through a list of [x, y] points |
 | `krita_fill` | Fill a circular area at a point |
 | `krita_draw_shape` | Draw rectangle, ellipse, or line |
+| `krita_draw_path` | Fill an SVG-style path with smooth Bezier curves |
+| `krita_create_vector_svg` | Create an editable vector layer from SVG/path data |
 | `krita_get_canvas` | Export canvas to PNG (for AI to see progress) |
 | `krita_save` | Save canvas to a specific file path |
 | `krita_undo` / `krita_redo` | Undo/redo actions |

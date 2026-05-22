@@ -5,9 +5,10 @@ Allows Claude (or any MCP client) to paint by sending commands to this plugin.
 
 from krita import *
 from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QImage, QPainter, QPainterPath
 from PyQt5.QtWidgets import QMessageBox
 import json
+import re
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -87,7 +88,8 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
                 "canvas_dir": CANVAS_OUTPUT_DIR,
                 "commands": [
                     "new_canvas", "set_color", "set_brush", "stroke",
-                    "fill", "draw_shape", "get_canvas", "undo", "redo",
+                    "fill", "draw_shape", "draw_path", "create_vector_svg",
+                    "get_canvas", "undo", "redo",
                     "clear", "save", "get_color_at", "list_brushes"
                 ]
             })
@@ -197,6 +199,10 @@ class KritaMCPExtension(Extension):
                 return self.cmd_fill(params)
             elif action == "draw_shape":
                 return self.cmd_draw_shape(params)
+            elif action == "draw_path":
+                return self.cmd_draw_path(params)
+            elif action == "create_vector_svg":
+                return self.cmd_create_vector_svg(params)
             elif action == "get_canvas":
                 return self.cmd_get_canvas(params)
             elif action == "undo":
@@ -604,6 +610,243 @@ class KritaMCPExtension(Extension):
         doc.refreshProjection()
 
         return {"status": "ok", "shape": shape}
+
+    def cmd_draw_path(self, params):
+        """Draw a filled SVG-style path to the active paint layer."""
+        path_data = params.get("path", "")
+        if not path_data:
+            return {"error": "No path specified"}
+
+        layer = self.get_active_layer()
+        if not layer:
+            return {"error": "No active layer"}
+
+        doc = self.get_active_document()
+        view = self.get_active_view()
+        if not doc or not view:
+            return {"error": "No active document or view"}
+
+        try:
+            path = self.svg_path_to_qpainter_path(path_data)
+        except Exception as e:
+            return {"error": f"Invalid path: {e}"}
+
+        bounds = path.boundingRect()
+        if bounds.isEmpty():
+            return {"error": "Path has empty bounds"}
+
+        color_hex = params.get("color")
+        if color_hex:
+            color = QColor(color_hex)
+        else:
+            fg = view.foregroundColor()
+            color = fg.colorForCanvas(view.canvas())
+
+        opacity = max(0.0, min(1.0, float(params.get("opacity", 1.0))))
+        scale = params.get("scale")
+        fit = params.get("fit")
+        preserve_aspect = params.get("preserve_aspect", True)
+
+        if fit:
+            target_x = float(fit.get("x", 0))
+            target_y = float(fit.get("y", 0))
+            target_w = float(fit.get("width", bounds.width()))
+            target_h = float(fit.get("height", bounds.height()))
+            sx = target_w / bounds.width()
+            sy = target_h / bounds.height()
+            if preserve_aspect:
+                sx = sy = min(sx, sy)
+            offset_x = target_x - bounds.left() * sx + (target_w - bounds.width() * sx) / 2
+            offset_y = target_y - bounds.top() * sy + (target_h - bounds.height() * sy) / 2
+        else:
+            sx = sy = float(scale if scale is not None else 1.0)
+            offset_x = float(params.get("x", 0)) - bounds.left() * sx
+            offset_y = float(params.get("y", 0)) - bounds.top() * sy
+
+        draw_path = QPainterPath()
+        draw_path.addPath(path)
+        from PyQt5.QtGui import QTransform
+        transform = QTransform()
+        transform.translate(offset_x, offset_y)
+        transform.scale(sx, sy)
+        draw_path = transform.map(draw_path)
+
+        draw_bounds = draw_path.boundingRect().adjusted(-2, -2, 2, 2)
+        x1 = max(0, int(draw_bounds.left()))
+        y1 = max(0, int(draw_bounds.top()))
+        x2 = min(doc.width(), int(draw_bounds.right()) + 1)
+        y2 = min(doc.height(), int(draw_bounds.bottom()) + 1)
+        w = x2 - x1
+        h = y2 - y1
+        if w <= 0 or h <= 0:
+            return {"error": "Path out of bounds"}
+
+        image = QImage(w, h, QImage.Format_ARGB32)
+        image.fill(0)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.translate(-x1, -y1)
+        fill_color = QColor(color)
+        fill_color.setAlphaF(opacity)
+        painter.fillPath(draw_path, fill_color)
+        painter.end()
+
+        existing = layer.pixelData(x1, y1, w, h)
+        pixels = bytearray(existing)
+        mask = image.bits().asstring(w * h * 4)
+
+        for i in range(w * h):
+            idx = i * 4
+            alpha = mask[idx + 3] / 255.0
+            if alpha <= 0:
+                continue
+            pixels[idx] = int(pixels[idx] * (1 - alpha) + color.blue() * alpha)
+            pixels[idx + 1] = int(pixels[idx + 1] * (1 - alpha) + color.green() * alpha)
+            pixels[idx + 2] = int(pixels[idx + 2] * (1 - alpha) + color.red() * alpha)
+            pixels[idx + 3] = max(pixels[idx + 3], int(255 * alpha))
+
+        layer.setPixelData(bytes(pixels), x1, y1, w, h)
+        doc.refreshProjection()
+
+        return {
+            "status": "ok",
+            "bounds": {"x": x1, "y": y1, "width": w, "height": h},
+            "color": color.name(),
+        }
+
+    def svg_path_to_qpainter_path(self, path_data):
+        """Parse a compact subset of SVG path data into QPainterPath."""
+        tokens = re.findall(r"[MmZzCcQqLlHhVv]|-?(?:\d*\.\d+|\d+\.?)(?:e[-+]?\d+)?", path_data)
+        i = 0
+        cmd = None
+        current = QPointF(0, 0)
+        start = QPointF(0, 0)
+        path = QPainterPath()
+
+        def is_cmd(token):
+            return len(token) == 1 and token.isalpha()
+
+        def number():
+            nonlocal i
+            value = float(tokens[i])
+            i += 1
+            return value
+
+        while i < len(tokens):
+            if is_cmd(tokens[i]):
+                cmd = tokens[i]
+                i += 1
+
+            if cmd in ("M", "m"):
+                relative = cmd == "m"
+                x, y = number(), number()
+                current = QPointF(current.x() + x, current.y() + y) if relative else QPointF(x, y)
+                path.moveTo(current)
+                start = QPointF(current)
+                cmd = "l" if relative else "L"
+                while i < len(tokens) and not is_cmd(tokens[i]):
+                    x, y = number(), number()
+                    current = QPointF(current.x() + x, current.y() + y) if relative else QPointF(x, y)
+                    path.lineTo(current)
+            elif cmd in ("L", "l"):
+                relative = cmd == "l"
+                while i < len(tokens) and not is_cmd(tokens[i]):
+                    x, y = number(), number()
+                    current = QPointF(current.x() + x, current.y() + y) if relative else QPointF(x, y)
+                    path.lineTo(current)
+            elif cmd in ("H", "h"):
+                relative = cmd == "h"
+                while i < len(tokens) and not is_cmd(tokens[i]):
+                    x = number()
+                    current = QPointF(current.x() + x, current.y()) if relative else QPointF(x, current.y())
+                    path.lineTo(current)
+            elif cmd in ("V", "v"):
+                relative = cmd == "v"
+                while i < len(tokens) and not is_cmd(tokens[i]):
+                    y = number()
+                    current = QPointF(current.x(), current.y() + y) if relative else QPointF(current.x(), y)
+                    path.lineTo(current)
+            elif cmd in ("C", "c"):
+                relative = cmd == "c"
+                while i < len(tokens) and not is_cmd(tokens[i]):
+                    x1, y1, x2, y2, x, y = number(), number(), number(), number(), number(), number()
+                    c1 = QPointF(current.x() + x1, current.y() + y1) if relative else QPointF(x1, y1)
+                    c2 = QPointF(current.x() + x2, current.y() + y2) if relative else QPointF(x2, y2)
+                    end = QPointF(current.x() + x, current.y() + y) if relative else QPointF(x, y)
+                    path.cubicTo(c1, c2, end)
+                    current = end
+            elif cmd in ("Q", "q"):
+                relative = cmd == "q"
+                while i < len(tokens) and not is_cmd(tokens[i]):
+                    x1, y1, x, y = number(), number(), number(), number()
+                    c = QPointF(current.x() + x1, current.y() + y1) if relative else QPointF(x1, y1)
+                    end = QPointF(current.x() + x, current.y() + y) if relative else QPointF(x, y)
+                    path.quadTo(c, end)
+                    current = end
+            elif cmd in ("Z", "z"):
+                path.closeSubpath()
+                current = QPointF(start)
+                cmd = None
+            else:
+                raise ValueError(f"Unsupported SVG path command: {cmd}")
+
+        return path
+
+    def cmd_create_vector_svg(self, params):
+        """Create a vector layer and add editable shapes from SVG markup."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+
+        svg = params.get("svg")
+        path_data = params.get("path")
+        name = params.get("name", "Vector Layer")
+        color = params.get("color", "#000000")
+        width = float(params.get("width", doc.width()))
+        height = float(params.get("height", doc.height()))
+
+        if not svg:
+            if not path_data:
+                return {"error": "No svg or path specified"}
+            fill = params.get("fill", color)
+            stroke = params.get("stroke", "none")
+            stroke_width = params.get("stroke_width", 0)
+            transform = params.get("transform", "")
+            transform_attr = f' transform="{self.xml_escape(transform)}"' if transform else ""
+            svg = (
+                f'<svg xmlns="http://www.w3.org/2000/svg" '
+                f'width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+                f'<path d="{self.xml_escape(path_data)}" fill="{self.xml_escape(fill)}" '
+                f'stroke="{self.xml_escape(stroke)}" stroke-width="{stroke_width}"{transform_attr}/>'
+                f'</svg>'
+            )
+
+        root = doc.rootNode()
+        if hasattr(doc, "createVectorLayer"):
+            vector_layer = doc.createVectorLayer(name)
+        else:
+            vector_layer = doc.createNode(name, "vectorlayer")
+
+        if not vector_layer:
+            return {"error": "Could not create vector layer"}
+
+        root.addChildNode(vector_layer, None)
+        shapes = vector_layer.addShapesFromSvg(svg)
+
+        if hasattr(doc, "setActiveNode"):
+            doc.setActiveNode(vector_layer)
+        doc.refreshProjection()
+
+        return {
+            "status": "ok",
+            "name": name,
+            "shape_count": len(shapes),
+            "layer_type": vector_layer.type(),
+        }
+
+    def xml_escape(self, value):
+        """Escape XML attribute text."""
+        return str(value).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
 
     def cmd_get_canvas(self, params):
         """Export current canvas to file and return path."""

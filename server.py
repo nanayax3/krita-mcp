@@ -361,6 +361,61 @@ def krita_list_layers() -> str:
 
 
 @mcp.tool()
+def krita_find_nodes(
+    name: str = "",
+    type: Optional[str] = None,
+    color_label: int = 0,
+    recursive: bool = True,
+    partial_match: bool = False,
+    under: Optional[str] = None,
+) -> str:
+    """
+    Search the layer tree for nodes matching name/type/color-label criteria — for pulling out
+    specific layers/masks in a large document without parsing list_layers' full tree dump.
+
+    Args:
+        name: Name to match (empty = match any name)
+        type: Node type to filter by, e.g. "paintlayer", "vectorlayer", "grouplayer",
+            "filllayer", "clonelayer", "filelayer", "filtermask", "transparencymask",
+            "selectionmask", "colorizemask", "transformmask" (omit for any type)
+        color_label: Krita's layer color-label index to filter by (omit/0 for any)
+        recursive: Search nested groups too (default True)
+        partial_match: Substring match instead of exact name match
+        under: Restrict the search to this layer/group's subtree (name or id) — default: the
+            whole document
+    """
+    params = {
+        "name": name, "recursive": recursive, "partial_match": partial_match,
+        "color_label": color_label,
+    }
+    if type:
+        params["type"] = type
+    if under:
+        params["under"] = under
+    result = send_command("find_nodes", params)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+
+    def format_layers(layers, indent=0):
+        lines = []
+        for layer in layers:
+            prefix = "  " * indent + "- "
+            vis = "" if layer["visible"] else " (hidden)"
+            lines.append(
+                f"{prefix}{layer['name']} (id={layer['id']}) [{layer['type']}] "
+                f"opacity={layer['opacity']}/255 blend={layer['blendingMode']}{vis}"
+            )
+            lines.extend(format_layers(layer["children"], indent + 1))
+        return lines
+
+    lines = format_layers(result.get("nodes", []))
+    if not lines:
+        return "No matching nodes"
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def krita_create_layer(name: str = "New Layer", type: str = "paint", parent: Optional[str] = None) -> str:
     """
     Create a new layer.

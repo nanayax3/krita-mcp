@@ -98,6 +98,7 @@ If using a virtual environment:
 | Tool | Description |
 |------|-------------|
 | `krita_list_layers` | List the layer tree (name, id, type, visibility, opacity, blending mode) — layer names aren't guaranteed unique, so tools that take a `name` also accept a layer's `id` |
+| `krita_find_nodes` | Search the layer tree by name/type/color-label — for pulling out specific layers/masks without parsing the full tree |
 | `krita_create_layer` | Create a paint/group/vector layer, optionally nested in a group |
 | `krita_delete_layer` | Remove a layer by name |
 | `krita_set_active_layer` | Make a layer the target for paint/fill/shape commands |

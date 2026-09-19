@@ -224,6 +224,8 @@ class KritaMCPExtension(Extension):
                 return self.cmd_open_file(params)
             elif action == "list_layers":
                 return self.cmd_list_layers(params)
+            elif action == "find_nodes":
+                return self.cmd_find_nodes(params)
             elif action == "create_layer":
                 return self.cmd_create_layer(params)
             elif action == "delete_layer":
@@ -899,6 +901,27 @@ class KritaMCPExtension(Extension):
             return {"error": "No active document"}
         root = doc.rootNode()
         return {"status": "ok", "layers": [self._node_info(c) for c in root.childNodes()]}
+
+    def cmd_find_nodes(self, params):
+        """
+        Search the layer tree for nodes matching name/type/color-label criteria — for pulling out
+        specific layers/masks in a large document without parsing list_layers' full tree dump.
+        Searches from the document root by default, or a subtree via "under" (name or id).
+        """
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        under_name = params.get("under")
+        root = self.find_node(doc, under_name) if under_name else doc.rootNode()
+        if not root:
+            return {"error": f"Layer not found: {under_name}"}
+        name = params.get("name", "")
+        recursive = params.get("recursive", True)
+        partial_match = params.get("partial_match", False)
+        node_type = params.get("type", "")
+        color_label = params.get("color_label", 0)
+        matches = root.findChildNodes(name, recursive, partial_match, node_type, color_label)
+        return {"status": "ok", "nodes": [self._node_info(n) for n in matches]}
 
     def cmd_create_layer(self, params):
         """Create a new layer (paint, group, or vector) under a parent (default: root)."""

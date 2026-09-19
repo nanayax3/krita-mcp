@@ -4,7 +4,7 @@ Allows Claude (or any MCP client) to paint by sending commands to this plugin.
 """
 
 from krita import *
-from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF
+from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF, QUuid
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QMessageBox
 import json
@@ -88,7 +88,16 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
                 "commands": [
                     "new_canvas", "set_color", "set_brush", "stroke",
                     "fill", "draw_shape", "get_canvas", "undo", "redo",
-                    "clear", "save", "get_color_at", "list_brushes"
+                    "clear", "save", "get_color_at", "list_brushes", "open_file",
+                    "list_layers", "create_layer", "delete_layer", "set_active_layer",
+                    "set_layer_visible", "set_layer_opacity", "set_layer_blending_mode",
+                    "merge_layer_down", "duplicate_layer", "reorder_layer",
+                    "select_rectangle", "select_all", "clear_selection", "invert_selection",
+                    "grow_selection", "shrink_selection", "feather_selection",
+                    "list_filters", "apply_filter",
+                    "document_info", "set_color_space", "list_color_profiles",
+                    "list_documents", "close_document", "resize_canvas", "crop_canvas",
+                    "flatten_image", "export_layer"
                 ]
             })
         else:
@@ -213,6 +222,62 @@ class KritaMCPExtension(Extension):
                 return self.cmd_list_brushes(params)
             elif action == "open_file":
                 return self.cmd_open_file(params)
+            elif action == "list_layers":
+                return self.cmd_list_layers(params)
+            elif action == "create_layer":
+                return self.cmd_create_layer(params)
+            elif action == "delete_layer":
+                return self.cmd_delete_layer(params)
+            elif action == "set_active_layer":
+                return self.cmd_set_active_layer(params)
+            elif action == "set_layer_visible":
+                return self.cmd_set_layer_visible(params)
+            elif action == "set_layer_opacity":
+                return self.cmd_set_layer_opacity(params)
+            elif action == "set_layer_blending_mode":
+                return self.cmd_set_layer_blending_mode(params)
+            elif action == "merge_layer_down":
+                return self.cmd_merge_layer_down(params)
+            elif action == "duplicate_layer":
+                return self.cmd_duplicate_layer(params)
+            elif action == "reorder_layer":
+                return self.cmd_reorder_layer(params)
+            elif action == "select_rectangle":
+                return self.cmd_select_rectangle(params)
+            elif action == "select_all":
+                return self.cmd_select_all(params)
+            elif action == "clear_selection":
+                return self.cmd_clear_selection(params)
+            elif action == "invert_selection":
+                return self.cmd_invert_selection(params)
+            elif action == "grow_selection":
+                return self.cmd_grow_selection(params)
+            elif action == "shrink_selection":
+                return self.cmd_shrink_selection(params)
+            elif action == "feather_selection":
+                return self.cmd_feather_selection(params)
+            elif action == "list_filters":
+                return self.cmd_list_filters(params)
+            elif action == "apply_filter":
+                return self.cmd_apply_filter(params)
+            elif action == "document_info":
+                return self.cmd_document_info(params)
+            elif action == "set_color_space":
+                return self.cmd_set_color_space(params)
+            elif action == "list_color_profiles":
+                return self.cmd_list_color_profiles(params)
+            elif action == "list_documents":
+                return self.cmd_list_documents(params)
+            elif action == "close_document":
+                return self.cmd_close_document(params)
+            elif action == "resize_canvas":
+                return self.cmd_resize_canvas(params)
+            elif action == "crop_canvas":
+                return self.cmd_crop_canvas(params)
+            elif action == "flatten_image":
+                return self.cmd_flatten_image(params)
+            elif action == "export_layer":
+                return self.cmd_export_layer(params)
             else:
                 return {"error": f"Unknown action: {action}"}
 
@@ -238,6 +303,33 @@ class KritaMCPExtension(Extension):
         if doc:
             return doc.activeNode()
         return None
+
+    def get_selection_mask(self, doc, x, y, w, h):
+        """Per-pixel selectedness (0-255) for a region, or None if no selection is active.
+
+        Krita's own selection() only clips its native brush/fill tools — since this
+        plugin paints via setPixelData() directly, callers must multiply it in manually.
+        """
+        selection = doc.selection()
+        if selection is None:
+            return None
+        return bytearray(selection.pixelData(x, y, w, h))
+
+    def find_node(self, doc, name):
+        """Find a node by name, or by unique ID, anywhere in the layer tree, or None.
+
+        Node.name() is not guaranteed unique -- doc.nodeByName() silently returns only the first
+        match. Every node's "id" field (see _node_info, returned by list_layers/create_layer/
+        duplicate_layer) is that node's real uniqueId(), which IS guaranteed unique; passing one
+        of those id strings back in here (any "name" param throughout this file doubles as an id
+        param this way, so no tool signatures needed to change) resolves the ambiguity exactly.
+        QUuid(name) parses to a null UUID for anything that isn't a valid "{...}"-bracketed uuid
+        string -- including any normal layer name -- so this never misfires on a real name.
+        """
+        uid = QUuid(name) if name else QUuid()
+        if not uid.isNull():
+            return doc.nodeByUniqueID(uid)
+        return doc.nodeByName(name)
 
     def cmd_new_canvas(self, params):
         """Create a new canvas."""
@@ -363,6 +455,7 @@ class KritaMCPExtension(Extension):
         # Get existing pixel data for the affected region
         existing = layer.pixelData(min_x, min_y, w, h)
         pixels = bytearray(existing)
+        sel_mask = self.get_selection_mask(doc, min_x, min_y, w, h)
 
         import math
 
@@ -391,7 +484,8 @@ class KritaMCPExtension(Extension):
                                     falloff = (dist - hardness) / (1.0 - hardness) if hardness < 1.0 else 0
                                     alpha_factor = 1.0 - falloff
 
-                            final_alpha = int(255 * alpha_factor * opacity * point_opacity)
+                            sel_factor = (sel_mask[py * w + px] / 255.0) if sel_mask else 1.0
+                            final_alpha = int(255 * alpha_factor * opacity * point_opacity * sel_factor)
 
                             if final_alpha > 0:
                                 idx = (py * w + px) * 4
@@ -472,6 +566,7 @@ class KritaMCPExtension(Extension):
         # Get existing pixel data
         existing = layer.pixelData(x1, y1, w, h)
         pixels = bytearray(existing)
+        sel_mask = self.get_selection_mask(doc, x1, y1, w, h)
 
         # Draw circle
         for py in range(h):
@@ -481,10 +576,20 @@ class KritaMCPExtension(Extension):
                 dy = (y1 + py) - y
                 if dx*dx + dy*dy <= radius*radius:
                     idx = (py * w + px) * 4
-                    pixels[idx] = b      # B
-                    pixels[idx+1] = g    # G
-                    pixels[idx+2] = r    # R
-                    pixels[idx+3] = 255  # A
+                    sel_alpha = sel_mask[py * w + px] if sel_mask else 255
+                    if sel_alpha == 0:
+                        continue
+                    if sel_alpha == 255:
+                        pixels[idx] = b      # B
+                        pixels[idx+1] = g    # G
+                        pixels[idx+2] = r    # R
+                        pixels[idx+3] = 255  # A
+                    else:
+                        blend = sel_alpha / 255.0
+                        pixels[idx] = int(pixels[idx] * (1 - blend) + b * blend)
+                        pixels[idx+1] = int(pixels[idx+1] * (1 - blend) + g * blend)
+                        pixels[idx+2] = int(pixels[idx+2] * (1 - blend) + r * blend)
+                        pixels[idx+3] = max(pixels[idx+3], sel_alpha)
 
         layer.setPixelData(bytes(pixels), x1, y1, w, h)
         doc.refreshProjection()
@@ -565,8 +670,23 @@ class KritaMCPExtension(Extension):
             h = y2 - y1
 
             if w > 0 and h > 0:
-                pixel_data = bytes([b, g, r, 255] * (w * h))
-                layer.setPixelData(pixel_data, x1, y1, w, h)
+                sel_mask = self.get_selection_mask(doc, x1, y1, w, h)
+                if sel_mask is None:
+                    pixel_data = bytes([b, g, r, 255] * (w * h))
+                    layer.setPixelData(pixel_data, x1, y1, w, h)
+                else:
+                    pixels = bytearray(layer.pixelData(x1, y1, w, h))
+                    for i in range(w * h):
+                        idx = i * 4
+                        sel_alpha = sel_mask[i]
+                        if sel_alpha == 0:
+                            continue
+                        blend = sel_alpha / 255.0
+                        pixels[idx] = int(pixels[idx] * (1 - blend) + b * blend)
+                        pixels[idx+1] = int(pixels[idx+1] * (1 - blend) + g * blend)
+                        pixels[idx+2] = int(pixels[idx+2] * (1 - blend) + r * blend)
+                        pixels[idx+3] = max(pixels[idx+3], sel_alpha)
+                    layer.setPixelData(bytes(pixels), x1, y1, w, h)
         elif shape == "ellipse" and fill:
             # Draw filled ellipse using pixel data
             cx = x + width / 2
@@ -584,6 +704,7 @@ class KritaMCPExtension(Extension):
             if w > 0 and h > 0:
                 existing = layer.pixelData(x1, y1, w, h)
                 pixels = bytearray(existing)
+                sel_mask = self.get_selection_mask(doc, x1, y1, w, h)
 
                 for py in range(h):
                     for px in range(w):
@@ -591,11 +712,21 @@ class KritaMCPExtension(Extension):
                         dx = (x1 + px - cx) / rx if rx > 0 else 0
                         dy = (y1 + py - cy) / ry if ry > 0 else 0
                         if dx*dx + dy*dy <= 1:
+                            sel_alpha = sel_mask[py * w + px] if sel_mask else 255
+                            if sel_alpha == 0:
+                                continue
                             idx = (py * w + px) * 4
-                            pixels[idx] = b
-                            pixels[idx+1] = g
-                            pixels[idx+2] = r
-                            pixels[idx+3] = 255
+                            if sel_alpha == 255:
+                                pixels[idx] = b
+                                pixels[idx+1] = g
+                                pixels[idx+2] = r
+                                pixels[idx+3] = 255
+                            else:
+                                blend = sel_alpha / 255.0
+                                pixels[idx] = int(pixels[idx] * (1 - blend) + b * blend)
+                                pixels[idx+1] = int(pixels[idx+1] * (1 - blend) + g * blend)
+                                pixels[idx+2] = int(pixels[idx+2] * (1 - blend) + r * blend)
+                                pixels[idx+3] = max(pixels[idx+3], sel_alpha)
 
                 layer.setPixelData(bytes(pixels), x1, y1, w, h)
         else:
@@ -745,6 +876,383 @@ class KritaMCPExtension(Extension):
             window.addView(doc)
 
         return {"status": "ok", "path": filepath, "name": doc.name(), "width": doc.width(), "height": doc.height()}
+
+    # --- Layers ---
+
+    LAYER_TYPE_ALIASES = {"paint": "paintlayer", "group": "grouplayer", "vector": "vectorlayer"}
+
+    def _node_info(self, node):
+        return {
+            "name": node.name(),
+            "id": node.uniqueId().toString(),
+            "type": node.type(),
+            "visible": node.visible(),
+            "opacity": node.opacity(),
+            "blendingMode": node.blendingMode(),
+            "children": [self._node_info(c) for c in node.childNodes()],
+        }
+
+    def cmd_list_layers(self, params):
+        """List the layer tree (bottom-to-top per group) of the active document."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        root = doc.rootNode()
+        return {"status": "ok", "layers": [self._node_info(c) for c in root.childNodes()]}
+
+    def cmd_create_layer(self, params):
+        """Create a new layer (paint, group, or vector) under a parent (default: root)."""
+        name = params.get("name", "New Layer")
+        layer_type = params.get("type", "paint")
+        parent_name = params.get("parent")
+
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+
+        node_type = self.LAYER_TYPE_ALIASES.get(layer_type, layer_type)
+        if node_type == "grouplayer":
+            node = doc.createGroupLayer(name)
+        elif node_type == "vectorlayer":
+            node = doc.createVectorLayer(name)
+        else:
+            node = doc.createNode(name, node_type)
+
+        if not node:
+            return {"error": f"Failed to create layer of type: {layer_type}"}
+
+        parent = self.find_node(doc, parent_name) if parent_name else doc.rootNode()
+        if not parent:
+            return {"error": f"Parent layer not found: {parent_name}"}
+
+        parent.addChildNode(node, None)
+        doc.refreshProjection()
+        return {"status": "ok", "name": node.name(), "id": node.uniqueId().toString(), "type": node.type()}
+
+    def cmd_delete_layer(self, params):
+        """Remove a layer by name."""
+        node = self.find_node(self.get_active_document(), params.get("name"))
+        if not node:
+            return {"error": f"Layer not found: {params.get('name')}"}
+        node.remove()
+        self.get_active_document().refreshProjection()
+        return {"status": "ok", "name": params.get("name")}
+
+    def cmd_set_active_layer(self, params):
+        """Make a layer the active one (subsequent paint/fill/shape commands target it)."""
+        doc = self.get_active_document()
+        node = self.find_node(doc, params.get("name"))
+        if not node:
+            return {"error": f"Layer not found: {params.get('name')}"}
+        doc.setActiveNode(node)
+        return {"status": "ok", "name": params.get("name")}
+
+    def cmd_set_layer_visible(self, params):
+        """Show or hide a layer."""
+        doc = self.get_active_document()
+        node = self.find_node(doc, params.get("name"))
+        if not node:
+            return {"error": f"Layer not found: {params.get('name')}"}
+        node.setVisible(params.get("visible", True))
+        doc.refreshProjection()
+        return {"status": "ok", "name": params.get("name"), "visible": params.get("visible", True)}
+
+    def cmd_set_layer_opacity(self, params):
+        """Set a layer's opacity (0-100)."""
+        doc = self.get_active_document()
+        node = self.find_node(doc, params.get("name"))
+        if not node:
+            return {"error": f"Layer not found: {params.get('name')}"}
+        opacity = params.get("opacity", 100)
+        node.setOpacity(int(round(opacity / 100 * 255)))
+        doc.refreshProjection()
+        return {"status": "ok", "name": params.get("name"), "opacity": opacity}
+
+    def cmd_set_layer_blending_mode(self, params):
+        """Set a layer's blending mode (e.g. 'normal', 'multiply', 'screen', 'overlay')."""
+        doc = self.get_active_document()
+        node = self.find_node(doc, params.get("name"))
+        if not node:
+            return {"error": f"Layer not found: {params.get('name')}"}
+        node.setBlendingMode(params.get("mode", "normal"))
+        doc.refreshProjection()
+        return {"status": "ok", "name": params.get("name"), "mode": params.get("mode")}
+
+    def cmd_merge_layer_down(self, params):
+        """Merge a layer with the visible layer beneath it."""
+        doc = self.get_active_document()
+        node = self.find_node(doc, params.get("name"))
+        if not node:
+            return {"error": f"Layer not found: {params.get('name')}"}
+        merged = node.mergeDown()
+        doc.refreshProjection()
+        return {"status": "ok", "merged_name": merged.name() if merged else None}
+
+    def cmd_duplicate_layer(self, params):
+        """Duplicate a layer, inserting the copy directly above the original."""
+        doc = self.get_active_document()
+        node = self.find_node(doc, params.get("name"))
+        if not node:
+            return {"error": f"Layer not found: {params.get('name')}"}
+        dup = node.duplicate()
+        parent = node.parentNode() or doc.rootNode()
+        parent.addChildNode(dup, node)
+        doc.refreshProjection()
+        return {"status": "ok", "name": dup.name(), "id": dup.uniqueId().toString()}
+
+    def cmd_reorder_layer(self, params):
+        """Move a layer one step up or down within its parent's stacking order."""
+        doc = self.get_active_document()
+        node = self.find_node(doc, params.get("name"))
+        if not node:
+            return {"error": f"Layer not found: {params.get('name')}"}
+
+        parent = node.parentNode()
+        if not parent:
+            return {"error": "Cannot reorder the root node"}
+
+        siblings = parent.childNodes()  # bottom-to-top
+        try:
+            idx = siblings.index(node)
+        except ValueError:
+            return {"error": "Layer not found among its parent's children"}
+
+        direction = params.get("direction", "up")
+        if direction == "up":
+            if idx + 1 >= len(siblings):
+                return {"error": "Layer is already at the top"}
+            target = siblings[idx + 1]
+        elif direction == "down":
+            if idx - 1 < 0:
+                return {"error": "Layer is already at the bottom"}
+            target = siblings[idx - 1]
+        else:
+            return {"error": "direction must be 'up' or 'down'"}
+
+        parent.removeChildNode(node)
+        parent.addChildNode(node, target)
+        doc.refreshProjection()
+        return {"status": "ok", "name": params.get("name"), "direction": direction}
+
+    # --- Selections ---
+
+    def cmd_select_rectangle(self, params):
+        """Set the active selection to a rectangle."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        x, y = params.get("x", 0), params.get("y", 0)
+        w, h = params.get("width", 100), params.get("height", 100)
+        sel = Selection()
+        sel.select(x, y, w, h, params.get("value", 255))
+        doc.setSelection(sel)
+        return {"status": "ok", "x": x, "y": y, "width": w, "height": h}
+
+    def cmd_select_all(self, params):
+        """Select the entire canvas."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        sel = Selection()
+        sel.select(0, 0, doc.width(), doc.height(), 255)
+        doc.setSelection(sel)
+        return {"status": "ok"}
+
+    def cmd_clear_selection(self, params):
+        """Remove the active selection (nothing/everything, per subsequent tool)."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        doc.setSelection(None)
+        return {"status": "ok"}
+
+    def cmd_invert_selection(self, params):
+        doc = self.get_active_document()
+        sel = doc.selection() if doc else None
+        if not sel:
+            return {"error": "No active selection"}
+        sel.invert()
+        doc.setSelection(sel)
+        return {"status": "ok"}
+
+    def cmd_grow_selection(self, params):
+        doc = self.get_active_document()
+        sel = doc.selection() if doc else None
+        if not sel:
+            return {"error": "No active selection"}
+        radius = params.get("radius", 5)
+        sel.grow(radius, radius)
+        doc.setSelection(sel)
+        return {"status": "ok", "radius": radius}
+
+    def cmd_shrink_selection(self, params):
+        doc = self.get_active_document()
+        sel = doc.selection() if doc else None
+        if not sel:
+            return {"error": "No active selection"}
+        radius = params.get("radius", 5)
+        sel.shrink(radius, radius, params.get("edge_lock", False))
+        doc.setSelection(sel)
+        return {"status": "ok", "radius": radius}
+
+    def cmd_feather_selection(self, params):
+        doc = self.get_active_document()
+        sel = doc.selection() if doc else None
+        if not sel:
+            return {"error": "No active selection"}
+        radius = params.get("radius", 5)
+        sel.feather(radius)
+        doc.setSelection(sel)
+        return {"status": "ok", "radius": radius}
+
+    # --- Filters ---
+
+    def cmd_list_filters(self, params):
+        """List registered filter IDs usable with apply_filter."""
+        return {"status": "ok", "filters": Krita.instance().filters()}
+
+    def cmd_apply_filter(self, params):
+        """Apply a named filter (destructively) to a layer's full bounds."""
+        name = params.get("name")
+        if not name:
+            return {"error": "No filter name specified"}
+
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+
+        layer_name = params.get("layer")
+        node = self.find_node(doc, layer_name) if layer_name else self.get_active_layer()
+        if not node:
+            return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
+
+        filt = Krita.instance().filter(name)
+        if not filt:
+            return {"error": f"Unknown filter: {name}. See list_filters for valid names."}
+
+        config = params.get("config")
+        if config:
+            info = InfoObject()
+            info.setProperties(config)
+            filt.setConfiguration(info)
+
+        bounds = node.bounds()
+        filt.apply(node, bounds.x(), bounds.y(), bounds.width(), bounds.height())
+        doc.refreshProjection()
+        return {"status": "ok", "filter": name, "layer": node.name()}
+
+    # --- Document ---
+
+    def cmd_document_info(self, params):
+        """Report dimensions, color space, and file info for the active document."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        return {
+            "status": "ok",
+            "name": doc.name(),
+            "fileName": doc.fileName(),
+            "width": doc.width(),
+            "height": doc.height(),
+            "colorModel": doc.colorModel(),
+            "colorDepth": doc.colorDepth(),
+            "colorProfile": doc.colorProfile(),
+            "resolution": doc.resolution(),
+        }
+
+    def cmd_set_color_space(self, params):
+        """Convert the active document's color model/depth/profile (e.g. for HDR: RGBA/F16/scRGB-linear)."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        color_model = params.get("color_model")
+        color_depth = params.get("color_depth")
+        color_profile = params.get("color_profile")
+        ok = doc.setColorSpace(color_model, color_depth, color_profile)
+        if not ok:
+            return {"error": "Failed to set color space — check list_color_profiles for valid model/depth/profile combinations"}
+        doc.refreshProjection()
+        return {"status": "ok", "colorModel": color_model, "colorDepth": color_depth, "colorProfile": color_profile}
+
+    def cmd_list_color_profiles(self, params):
+        """List color profile names available for a given color model + depth."""
+        color_model = params.get("color_model", "RGBA")
+        color_depth = params.get("color_depth", "U8")
+        profiles = Krita.instance().profiles(color_model, color_depth)
+        return {"status": "ok", "profiles": profiles}
+
+    def cmd_list_documents(self, params):
+        """List all open documents."""
+        docs = Krita.instance().documents()
+        return {
+            "status": "ok",
+            "documents": [
+                {"name": d.name(), "fileName": d.fileName(), "width": d.width(), "height": d.height()}
+                for d in docs
+            ],
+        }
+
+    def cmd_close_document(self, params):
+        """Close a document by name, or the active document if no name given."""
+        name = params.get("name")
+        app = Krita.instance()
+        if name:
+            target = next((d for d in app.documents() if d.name() == name), None)
+            if not target:
+                return {"error": f"Document not found: {name}"}
+        else:
+            target = self.get_active_document()
+            if not target:
+                return {"error": "No active document"}
+        closed_name = target.name()
+        target.close()
+        return {"status": "ok", "name": closed_name}
+
+    def cmd_resize_canvas(self, params):
+        """Resize the canvas (repositions the content origin; does not scale pixels)."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        x, y = params.get("x", 0), params.get("y", 0)
+        w, h = params.get("width", doc.width()), params.get("height", doc.height())
+        doc.resizeImage(x, y, w, h)
+        doc.refreshProjection()
+        return {"status": "ok", "x": x, "y": y, "width": w, "height": h}
+
+    def cmd_crop_canvas(self, params):
+        """Crop the canvas to a rectangle."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        x, y = params.get("x", 0), params.get("y", 0)
+        w, h = params.get("width", doc.width()), params.get("height", doc.height())
+        doc.crop(x, y, w, h)
+        doc.refreshProjection()
+        return {"status": "ok", "x": x, "y": y, "width": w, "height": h}
+
+    def cmd_flatten_image(self, params):
+        """Flatten all layers into one."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        doc.flatten()
+        doc.refreshProjection()
+        return {"status": "ok"}
+
+    def cmd_export_layer(self, params):
+        """Export a single layer (default: active layer) to an image file."""
+        path = params.get("path")
+        if not path:
+            return {"error": "No path specified"}
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        layer_name = params.get("name")
+        node = self.find_node(doc, layer_name) if layer_name else self.get_active_layer()
+        if not node:
+            return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
+        node.save(path, doc.xRes(), doc.yRes(), InfoObject())
+        return {"status": "ok", "name": node.name(), "path": path}
 
 
 # Register the extension

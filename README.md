@@ -28,11 +28,33 @@ Copy the plugin files to your Krita plugins directory:
 | Linux | `~/.local/share/krita/pykrita/` |
 | macOS | `~/Library/Application Support/krita/pykrita/` |
 
+**These are the defaults — they do not depend on where Krita itself is installed, but they are
+not guaranteed either.** Krita keeps its resource location (where `pykrita/`, brush presets, etc.
+live) in its own config, separately from the install path, and that location can differ from the
+table above if you've set a custom resource folder (Settings → Manage Resources → *Open Resources
+Folder*) or are running a portable build. If the plugin doesn't show up after following the steps
+below, open that dialog first and copy the plugin files into the `pykrita/` folder it actually
+shows you, not the table above.
+
 Copy both:
 - `krita-plugin/kritamcp/` (the folder with `__init__.py`)
 - `krita-plugin/kritamcp.desktop`
 
 Then in Krita: **Settings → Configure Krita → Python Plugin Manager → Enable "Krita MCP Bridge"** and restart Krita.
+
+**Troubleshooting: plugin doesn't appear in the Python Plugin Manager list at all.** This means
+Krita never found the files — the HTTP bridge then never starts, so an MCP client can reach
+`server.py` (the stdio process) just fine while every tool call fails with "Cannot connect to
+Krita," which can look like a networking problem but isn't one. In order of likelihood:
+1. **Wrong resource folder** (see above) — the most common cause for portable/custom installs.
+   Verify via Settings → Manage Resources → *Open Resources Folder* and re-copy the files there.
+2. Both `kritamcp/` (the folder) and `kritamcp.desktop` (the file) need to be copied — a `.desktop`
+   file with no matching folder, or vice versa, won't register.
+3. Krita's Python scripting support itself needs to be available to have a Python Plugin Manager
+   at all — check Settings → Configure Krita → Python Plugin Manager exists and lists *any*
+   plugins (including Krita's own bundled ones) before troubleshooting further.
+4. A restart is required after enabling the plugin — Krita does not hot-reload plugin changes or
+   newly-enabled plugins into the current session.
 
 ### 2. Install the MCP Server
 

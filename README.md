@@ -36,16 +36,13 @@ Then in Krita: **Settings → Configure Krita → Python Plugin Manager → Enab
 
 ### 2. Install the MCP Server
 
+Uses [uv](https://docs.astral.sh/uv/) for dependency management. From the repo root:
+
 ```bash
-pip install fastmcp httpx
+uv sync
 ```
 
-Or with a virtual environment:
-```bash
-python -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-pip install -r requirements.txt
-```
+This creates `.venv/` and installs `fastmcp` and `httpx` per `pyproject.toml`/`uv.lock`.
 
 ### 3. Configure Your MCP Client
 
@@ -55,24 +52,14 @@ Add to your MCP client config (e.g., Claude Desktop's `claude_desktop_config.jso
 {
   "mcpServers": {
     "krita": {
-      "command": "python",
-      "args": ["/path/to/server.py"]
+      "command": "uv",
+      "args": ["run", "--project", "/path/to/krita-mcp", "server.py"]
     }
   }
 }
 ```
 
-If using a virtual environment:
-```json
-{
-  "mcpServers": {
-    "krita": {
-      "command": "/path/to/.venv/Scripts/python",
-      "args": ["/path/to/server.py"]
-    }
-  }
-}
-```
+MCP servers don't inherit a working directory, so `--project` must be an absolute path.
 
 ## Available Tools
 

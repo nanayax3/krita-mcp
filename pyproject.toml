@@ -1,0 +1,10 @@
+[project]
+name = "krita-mcp"
+version = "0.1.0"
+description = "MCP server bridging Claude (or any MCP client) to Krita for AI-driven painting"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp",
+    "httpx",
+]

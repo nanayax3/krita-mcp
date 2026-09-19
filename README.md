@@ -137,6 +137,8 @@ If using a virtual environment:
 | `krita_resize_canvas` / `krita_crop_canvas` | Resize or crop the canvas |
 | `krita_flatten_image` | Flatten all layers |
 | `krita_export_layer` | Export a single layer to an image file |
+| `krita_create_mask` | Non-destructive filter/transparency/selection mask on a layer (vs. `apply_filter`'s destructive bake-in) |
+| `krita_set_filter_mask_filter` | Swap an existing filter mask's filter/config in place |
 
 ## The Export Timeout Fix
 

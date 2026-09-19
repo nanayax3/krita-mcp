@@ -382,6 +382,64 @@ def krita_create_layer(name: str = "New Layer", type: str = "paint", parent: Opt
 
 
 @mcp.tool()
+def krita_create_mask(
+    type: str,
+    layer: Optional[str] = None,
+    name: str = "Mask",
+    filter: Optional[str] = None,
+    config: Optional[dict] = None,
+) -> str:
+    """
+    Create a non-destructive mask on a layer. Unlike apply_filter (which bakes pixels in
+    permanently), a mask stays live: a filter mask's effect can be swapped later via
+    set_filter_mask_filter, and any mask can be shown/hidden via set_layer_visible or removed via
+    delete_layer without touching the layer's actual pixels.
+
+    Args:
+        type: "filter" (apply a live, editable filter), "transparency" (mask out regions —
+            content stays but doesn't render/export), or "selection" (mask that IS a saved
+            selection, restorable later)
+        layer: Layer to attach the mask to (default: the active layer)
+        name: Name for the new mask
+        filter: Required when type="filter" — filter name (see list_filters)
+        config: Filter-specific config dict when type="filter" (keys vary by filter)
+    """
+    params = {"type": type, "name": name}
+    if layer:
+        params["layer"] = layer
+    if filter:
+        params["filter"] = filter
+    if config:
+        params["config"] = config
+    result = send_command("create_mask", params)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Created {result.get('type')} '{result.get('name')}' (id={result.get('id')})"
+
+
+@mcp.tool()
+def krita_set_filter_mask_filter(mask: str, filter: str, config: Optional[dict] = None) -> str:
+    """
+    Swap an existing filter mask's filter and/or config in place — re-edit the non-destructive
+    effect without deleting and recreating the mask.
+
+    Args:
+        mask: Name or id of the filter mask (see list_layers)
+        filter: New filter name (see list_filters)
+        config: Filter-specific config dict (keys vary by filter; omit to keep the filter's default)
+    """
+    params = {"mask": mask, "filter": filter}
+    if config:
+        params["config"] = config
+    result = send_command("set_filter_mask_filter", params)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Filter mask '{mask}' now using '{filter}'"
+
+
+@mcp.tool()
 def krita_delete_layer(name: str) -> str:
     """Delete a layer by name, or by id (see list_layers) if the name might be ambiguous."""
     result = send_command("delete_layer", {"name": name})

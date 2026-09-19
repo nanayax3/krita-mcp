@@ -226,6 +226,10 @@ class KritaMCPExtension(Extension):
                 return self.cmd_list_layers(params)
             elif action == "create_layer":
                 return self.cmd_create_layer(params)
+            elif action == "create_mask":
+                return self.cmd_create_mask(params)
+            elif action == "set_filter_mask_filter":
+                return self.cmd_set_filter_mask_filter(params)
             elif action == "delete_layer":
                 return self.cmd_delete_layer(params)
             elif action == "set_active_layer":
@@ -928,6 +932,95 @@ class KritaMCPExtension(Extension):
         parent.addChildNode(node, None)
         doc.refreshProjection()
         return {"status": "ok", "name": node.name(), "id": node.uniqueId().toString(), "type": node.type()}
+
+    def cmd_create_mask(self, params):
+        """
+        Create a non-destructive mask (filter/transparency/selection) on a layer.
+
+        Non-destructive alternative to apply_filter: a filter mask stays live and editable
+        (swap its filter/config, toggle its visibility, delete it) instead of baking pixels in.
+        Transparency/selection masks likewise carry a Selection as their content rather than
+        overwriting layer pixels. All three attach as a child of the target layer, and use the
+        current active selection as their initial masked region if one exists, else the whole
+        canvas (so a freshly created mask starts fully "on" rather than blank).
+        """
+        mask_type = params.get("type")
+        if mask_type not in ("filter", "transparency", "selection"):
+            return {"error": "type must be 'filter', 'transparency', or 'selection'"}
+
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+
+        layer_name = params.get("layer")
+        target = self.find_node(doc, layer_name) if layer_name else self.get_active_layer()
+        if not target:
+            return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
+
+        name = params.get("name", "Mask")
+        selection = doc.selection()
+        if selection is None:
+            selection = Selection()
+            selection.select(0, 0, doc.width(), doc.height(), 255)
+
+        if mask_type == "filter":
+            filter_name = params.get("filter")
+            if not filter_name:
+                return {"error": "type='filter' requires a 'filter' param (see list_filters)"}
+            filt = Krita.instance().filter(filter_name)
+            if not filt:
+                return {"error": f"Unknown filter: {filter_name}. See list_filters for valid names."}
+            config = params.get("config")
+            if config:
+                info = InfoObject()
+                info.setProperties(config)
+                filt.setConfiguration(info)
+            mask = doc.createFilterMask(name, filt, selection)
+        elif mask_type == "transparency":
+            mask = doc.createTransparencyMask(name)
+            if mask:
+                mask.setSelection(selection)
+        else:
+            mask = doc.createSelectionMask(name)
+            if mask:
+                mask.setSelection(selection)
+
+        if not mask:
+            return {"error": f"Failed to create {mask_type} mask"}
+
+        target.addChildNode(mask, None)
+        doc.refreshProjection()
+        return {"status": "ok", "name": mask.name(), "id": mask.uniqueId().toString(), "type": mask.type()}
+
+    def cmd_set_filter_mask_filter(self, params):
+        """Swap an existing filter mask's filter and/or config in place — the actual point of
+        "non-destructive": re-edit the effect without deleting and recreating the mask."""
+        mask_name = params.get("mask")
+        filter_name = params.get("filter")
+        if not filter_name:
+            return {"error": "No filter name specified"}
+
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+
+        mask = self.find_node(doc, mask_name)
+        if not mask or mask.type() != "filtermask":
+            return {"error": f"Filter mask not found: {mask_name}"}
+
+        filt = Krita.instance().filter(filter_name)
+        if not filt:
+            return {"error": f"Unknown filter: {filter_name}. See list_filters for valid names."}
+
+        config = params.get("config")
+        if config:
+            info = InfoObject()
+            info.setProperties(config)
+            filt.setConfiguration(info)
+
+        mask.setFilter(filt)
+        doc.refreshProjection()
+        return {"status": "ok", "mask": mask_name, "filter": filter_name}
 
     def cmd_delete_layer(self, params):
         """Remove a layer by name."""

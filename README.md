@@ -93,6 +93,53 @@ If using a virtual environment:
 | `krita_list_brushes` | List available brush presets |
 | `krita_open_file` | Open an existing .kra, .png, .jpg, etc. |
 
+**Layers**
+
+| Tool | Description |
+|------|-------------|
+| `krita_list_layers` | List the layer tree (name, id, type, visibility, opacity, blending mode) — layer names aren't guaranteed unique, so tools that take a `name` also accept a layer's `id` |
+| `krita_create_layer` | Create a paint/group/vector layer, optionally nested in a group |
+| `krita_delete_layer` | Remove a layer by name |
+| `krita_set_active_layer` | Make a layer the target for paint/fill/shape commands |
+| `krita_set_layer_visible` | Show/hide a layer |
+| `krita_set_layer_opacity` | Set layer opacity (0-100) |
+| `krita_set_layer_blending_mode` | Set blending mode (multiply, screen, overlay, etc.) |
+| `krita_merge_layer_down` | Merge a layer into the one beneath it |
+| `krita_duplicate_layer` | Duplicate a layer |
+| `krita_reorder_layer` | Move a layer up/down in the stack |
+
+**Selections** — constrain `stroke`/`fill`/`draw_shape` to a region until cleared
+
+| Tool | Description |
+|------|-------------|
+| `krita_select_rectangle` | Select a rectangular region |
+| `krita_select_all` | Select the entire canvas |
+| `krita_clear_selection` | Remove the active selection |
+| `krita_invert_selection` | Invert the active selection |
+| `krita_grow_selection` / `krita_shrink_selection` | Expand/contract the selection |
+| `krita_feather_selection` | Soften the selection edge |
+
+**Filters**
+
+| Tool | Description |
+|------|-------------|
+| `krita_list_filters` | List available filter IDs |
+| `krita_apply_filter` | Apply a named filter to a layer |
+
+**Document**
+
+| Tool | Description |
+|------|-------------|
+| `krita_document_info` | Dimensions, color space, and file info |
+| `krita_set_color_space` | Convert color model/depth/profile (e.g. F16/F32 for HDR) |
+| `krita_list_color_profiles` | List valid profiles for a color model/depth |
+| `krita_list_documents` / `krita_close_document` | Manage open documents |
+| `krita_resize_canvas` / `krita_crop_canvas` | Resize or crop the canvas |
+| `krita_flatten_image` | Flatten all layers |
+| `krita_export_layer` | Export a single layer to an image file |
+| `krita_create_mask` | Non-destructive filter/transparency/selection mask on a layer (vs. `apply_filter`'s destructive bake-in) |
+| `krita_set_filter_mask_filter` | Swap an existing filter mask's filter/config in place |
+
 ## The Export Timeout Fix
 
 **This is the main reason this repo exists.**

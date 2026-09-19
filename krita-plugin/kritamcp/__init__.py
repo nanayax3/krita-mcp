@@ -6,7 +6,7 @@ Allows Claude (or any MCP client) to paint by sending commands to this plugin.
 from krita import *
 from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF, QUuid
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QMessageBox, QApplication
 import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -96,7 +96,7 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
                     "grow_selection", "shrink_selection", "feather_selection",
                     "list_filters", "apply_filter",
                     "document_info", "set_color_space", "list_color_profiles",
-                    "list_documents", "close_document", "resize_canvas", "crop_canvas",
+                    "list_documents", "close_document", "quit", "resize_canvas", "crop_canvas",
                     "flatten_image", "export_layer"
                 ]
             })
@@ -270,6 +270,8 @@ class KritaMCPExtension(Extension):
                 return self.cmd_list_documents(params)
             elif action == "close_document":
                 return self.cmd_close_document(params)
+            elif action == "quit":
+                return self.cmd_quit(params)
             elif action == "resize_canvas":
                 return self.cmd_resize_canvas(params)
             elif action == "crop_canvas":
@@ -1205,8 +1207,31 @@ class KritaMCPExtension(Extension):
             if not target:
                 return {"error": "No active document"}
         closed_name = target.name()
+        # Guard against a "save changes?" prompt blocking the event loop. setBatchmode(True)
+        # alone is not reliable for this on every Krita build (confirmed live on 6.0.3/Qt6 — the
+        # prompt still appeared with only that set) -- setModified(False) makes Krita's own
+        # dirty-check see nothing to save in the first place, which is the actual condition the
+        # prompt keys off, and is a more direct fix than batchmode.
+        target.setModified(False)
+        target.setBatchmode(True)
         target.close()
         return {"status": "ok", "name": closed_name}
+
+    def cmd_quit(self, params):
+        """
+        Cleanly quit Krita: close every open document without prompting to save, then quit the
+        application. For unattended/scripted restarts (e.g. after a plugin-code change) where no
+        human is present to click a save-changes or session-recovery dialog -- closing documents
+        properly (vs. killing the process mid-session) also avoids Krita treating the next launch
+        as crash recovery.
+        """
+        app = Krita.instance()
+        for doc in list(app.documents()):
+            doc.setModified(False)
+            doc.setBatchmode(True)
+            doc.close()
+        QApplication.instance().quit()
+        return {"status": "ok"}
 
     def cmd_resize_canvas(self, params):
         """Resize the canvas (repositions the content origin; does not scale pixels)."""

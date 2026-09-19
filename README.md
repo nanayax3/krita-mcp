@@ -134,6 +134,7 @@ If using a virtual environment:
 | `krita_set_color_space` | Convert color model/depth/profile (e.g. F16/F32 for HDR) |
 | `krita_list_color_profiles` | List valid profiles for a color model/depth |
 | `krita_list_documents` / `krita_close_document` | Manage open documents |
+| `krita_quit` | Cleanly quit Krita (closes documents without prompting to save) — for unattended/scripted restarts |
 | `krita_resize_canvas` / `krita_crop_canvas` | Resize or crop the canvas |
 | `krita_flatten_image` | Flatten all layers |
 | `krita_export_layer` | Export a single layer to an image file |

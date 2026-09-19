@@ -667,6 +667,23 @@ def krita_close_document(name: Optional[str] = None) -> str:
 
 
 @mcp.tool()
+def krita_quit() -> str:
+    """
+    Cleanly quit Krita: closes every open document without prompting to save, then quits the
+    application. For unattended/scripted restarts (e.g. after a plugin-code change) — a raw
+    process kill can leave Krita treating the next launch as crash recovery, and a plain
+    close_document/window-close can still hit a "save changes?" prompt on some Krita builds with
+    no human there to dismiss it; this avoids both. The MCP connection will drop once Krita
+    exits — expect the next tool call to fail until the plugin's HTTP server is back up.
+    """
+    result = send_command("quit", {})
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return "Krita is quitting"
+
+
+@mcp.tool()
 def krita_resize_canvas(x: int, y: int, width: int, height: int) -> str:
     """
     Resize the canvas without scaling pixels (repositions the content origin).

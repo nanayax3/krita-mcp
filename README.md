@@ -107,6 +107,7 @@ If using a virtual environment:
 | `krita_merge_layer_down` | Merge a layer into the one beneath it |
 | `krita_duplicate_layer` | Duplicate a layer |
 | `krita_reorder_layer` | Move a layer up/down in the stack |
+| `krita_scale_layer` / `krita_rotate_layer` / `krita_crop_layer` / `krita_shear_layer` | Resample/rotate/crop/shear a layer in place using Krita's real resampling filters |
 
 **Selections** — constrain `stroke`/`fill`/`draw_shape` to a region until cleared
 
@@ -135,6 +136,7 @@ If using a virtual environment:
 | `krita_list_color_profiles` | List valid profiles for a color model/depth |
 | `krita_list_documents` / `krita_close_document` | Manage open documents |
 | `krita_resize_canvas` / `krita_crop_canvas` | Resize or crop the canvas |
+| `krita_scale_canvas` / `krita_rotate_canvas` / `krita_shear_canvas` | Resample/rotate/shear the whole canvas using Krita's real resampling filters |
 | `krita_flatten_image` | Flatten all layers |
 | `krita_export_layer` | Export a single layer to an image file |
 

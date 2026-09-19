@@ -8,6 +8,7 @@ from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF, QUuid
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QMessageBox
 import json
+import math
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -242,6 +243,14 @@ class KritaMCPExtension(Extension):
                 return self.cmd_duplicate_layer(params)
             elif action == "reorder_layer":
                 return self.cmd_reorder_layer(params)
+            elif action == "scale_layer":
+                return self.cmd_scale_layer(params)
+            elif action == "rotate_layer":
+                return self.cmd_rotate_layer(params)
+            elif action == "crop_layer":
+                return self.cmd_crop_layer(params)
+            elif action == "shear_layer":
+                return self.cmd_shear_layer(params)
             elif action == "select_rectangle":
                 return self.cmd_select_rectangle(params)
             elif action == "select_all":
@@ -274,6 +283,12 @@ class KritaMCPExtension(Extension):
                 return self.cmd_resize_canvas(params)
             elif action == "crop_canvas":
                 return self.cmd_crop_canvas(params)
+            elif action == "scale_canvas":
+                return self.cmd_scale_canvas(params)
+            elif action == "rotate_canvas":
+                return self.cmd_rotate_canvas(params)
+            elif action == "shear_canvas":
+                return self.cmd_shear_canvas(params)
             elif action == "flatten_image":
                 return self.cmd_flatten_image(params)
             elif action == "export_layer":
@@ -1034,6 +1049,70 @@ class KritaMCPExtension(Extension):
         doc.refreshProjection()
         return {"status": "ok", "name": params.get("name"), "direction": direction}
 
+    def cmd_scale_layer(self, params):
+        """Resample a layer to new pixel dimensions in place (top-left corner stays fixed).
+
+        Node.scaleNode() (and rotateNode/cropNode/shearNode below) already call
+        image->waitForDone() internally at the C++ level before returning — unlike
+        ColorizeMask.updateMask(), these are synchronous from Python's perspective and need no
+        extra doc.waitForDone() of our own.
+        """
+        doc = self.get_active_document()
+        layer_name = params.get("name")
+        node = self.find_node(doc, layer_name) if layer_name else self.get_active_layer()
+        if not node:
+            return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
+        width, height = params.get("width"), params.get("height")
+        if not width or not height:
+            return {"error": "width and height are required"}
+        strategy = params.get("strategy", "Bicubic")
+        bounds = node.bounds()
+        node.scaleNode(QPointF(bounds.x(), bounds.y()), int(width), int(height), strategy)
+        doc.refreshProjection()
+        return {"status": "ok", "name": node.name(), "width": width, "height": height}
+
+    def cmd_rotate_layer(self, params):
+        """Rotate a layer in place around its own center."""
+        doc = self.get_active_document()
+        layer_name = params.get("name")
+        node = self.find_node(doc, layer_name) if layer_name else self.get_active_layer()
+        if not node:
+            return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
+        degrees = params.get("degrees")
+        if degrees is None:
+            return {"error": "degrees is required"}
+        node.rotateNode(math.radians(degrees))
+        doc.refreshProjection()
+        return {"status": "ok", "name": node.name(), "degrees": degrees}
+
+    def cmd_crop_layer(self, params):
+        """Crop a layer's content to a rectangle (in document coordinates)."""
+        doc = self.get_active_document()
+        layer_name = params.get("name")
+        node = self.find_node(doc, layer_name) if layer_name else self.get_active_layer()
+        if not node:
+            return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
+        x, y = params.get("x", 0), params.get("y", 0)
+        width, height = params.get("width"), params.get("height")
+        if not width or not height:
+            return {"error": "width and height are required"}
+        node.cropNode(int(x), int(y), int(width), int(height))
+        doc.refreshProjection()
+        return {"status": "ok", "name": node.name(), "x": x, "y": y, "width": width, "height": height}
+
+    def cmd_shear_layer(self, params):
+        """Shear a layer in place. angle_x/angle_y are in degrees (confirmed against Krita's own
+        libs/image/kis_image.cc: 'angleX, angleY are in degrees')."""
+        doc = self.get_active_document()
+        layer_name = params.get("name")
+        node = self.find_node(doc, layer_name) if layer_name else self.get_active_layer()
+        if not node:
+            return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
+        angle_x, angle_y = params.get("angle_x", 0), params.get("angle_y", 0)
+        node.shearNode(float(angle_x), float(angle_y))
+        doc.refreshProjection()
+        return {"status": "ok", "name": node.name(), "angle_x": angle_x, "angle_y": angle_y}
+
     # --- Selections ---
 
     def cmd_select_rectangle(self, params):
@@ -1229,6 +1308,41 @@ class KritaMCPExtension(Extension):
         doc.crop(x, y, w, h)
         doc.refreshProjection()
         return {"status": "ok", "x": x, "y": y, "width": w, "height": h}
+
+    def cmd_scale_canvas(self, params):
+        """Resample the whole canvas to new pixel dimensions (all layers), preserving DPI."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        width, height = params.get("width"), params.get("height")
+        if not width or not height:
+            return {"error": "width and height are required"}
+        strategy = params.get("strategy", "Bicubic")
+        doc.scaleImage(int(width), int(height), int(doc.xRes()), int(doc.yRes()), strategy)
+        doc.refreshProjection()
+        return {"status": "ok", "width": width, "height": height}
+
+    def cmd_rotate_canvas(self, params):
+        """Rotate the whole canvas (all layers), resizing the canvas to fit."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        degrees = params.get("degrees")
+        if degrees is None:
+            return {"error": "degrees is required"}
+        doc.rotateImage(math.radians(degrees))
+        doc.refreshProjection()
+        return {"status": "ok", "degrees": degrees}
+
+    def cmd_shear_canvas(self, params):
+        """Shear the whole canvas (all layers). angle_x/angle_y are in degrees."""
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+        angle_x, angle_y = params.get("angle_x", 0), params.get("angle_y", 0)
+        doc.shearImage(float(angle_x), float(angle_y))
+        doc.refreshProjection()
+        return {"status": "ok", "angle_x": angle_x, "angle_y": angle_y}
 
     def cmd_flatten_image(self, params):
         """Flatten all layers into one."""

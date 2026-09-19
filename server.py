@@ -481,6 +481,85 @@ def krita_reorder_layer(name: str, direction: str) -> str:
     return f"Moved '{name}' {direction}"
 
 
+@mcp.tool()
+def krita_scale_layer(width: int, height: int, name: Optional[str] = None, strategy: str = "Bicubic") -> str:
+    """
+    Resample a layer to new pixel dimensions in place (top-left corner stays fixed). Uses Krita's
+    real resampling filters, not manual pixel math.
+
+    Args:
+        width, height: New size in pixels
+        name: Layer name or id (default: the active layer)
+        strategy: Resampling filter — "Bicubic" (default), "Bilinear", "Box", "Bell", "BSpline",
+            "Lanczos3", "Mitchell", "Hermite" (an unrecognized name silently falls back to Bicubic)
+    """
+    params = {"width": width, "height": height, "strategy": strategy}
+    if name:
+        params["name"] = name
+    result = send_command("scale_layer", params, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Scaled '{result.get('name')}' to {width}x{height}"
+
+
+@mcp.tool()
+def krita_rotate_layer(degrees: float, name: Optional[str] = None) -> str:
+    """
+    Rotate a layer in place around its own center.
+
+    Args:
+        degrees: Rotation angle in degrees (clockwise)
+        name: Layer name or id (default: the active layer)
+    """
+    params = {"degrees": degrees}
+    if name:
+        params["name"] = name
+    result = send_command("rotate_layer", params, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Rotated '{result.get('name')}' by {degrees} degrees"
+
+
+@mcp.tool()
+def krita_crop_layer(x: int, y: int, width: int, height: int, name: Optional[str] = None) -> str:
+    """
+    Crop a layer's content to a rectangle (in document coordinates).
+
+    Args:
+        x, y, width, height: Crop rectangle
+        name: Layer name or id (default: the active layer)
+    """
+    params = {"x": x, "y": y, "width": width, "height": height}
+    if name:
+        params["name"] = name
+    result = send_command("crop_layer", params, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Cropped '{result.get('name')}' to ({x}, {y}) {width}x{height}"
+
+
+@mcp.tool()
+def krita_shear_layer(angle_x: float = 0, angle_y: float = 0, name: Optional[str] = None) -> str:
+    """
+    Shear a layer in place.
+
+    Args:
+        angle_x, angle_y: Shear angle in degrees along each axis
+        name: Layer name or id (default: the active layer)
+    """
+    params = {"angle_x": angle_x, "angle_y": angle_y}
+    if name:
+        params["name"] = name
+    result = send_command("shear_layer", params, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Sheared '{result.get('name')}' ({angle_x}, {angle_y} degrees)"
+
+
 # --- Selections ---
 
 @mcp.tool()
@@ -690,6 +769,45 @@ def krita_crop_canvas(x: int, y: int, width: int, height: int) -> str:
     if "error" in result:
         return f"Error: {result['error']}"
     return f"Canvas cropped to {width}x{height} at ({x}, {y})"
+
+
+@mcp.tool()
+def krita_scale_canvas(width: int, height: int, strategy: str = "Bicubic") -> str:
+    """
+    Resample the whole canvas (all layers) to new pixel dimensions, preserving DPI. Uses Krita's
+    real resampling filters, not manual pixel math. Unlike resize_canvas (which just repositions
+    the content origin), this actually resamples pixels.
+
+    Args:
+        width, height: New size in pixels
+        strategy: Resampling filter — "Bicubic" (default), "Bilinear", "Box", "Bell", "BSpline",
+            "Lanczos3", "Mitchell", "Hermite" (an unrecognized name silently falls back to Bicubic)
+    """
+    result = send_command("scale_canvas", {"width": width, "height": height, "strategy": strategy}, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Canvas scaled to {width}x{height}"
+
+
+@mcp.tool()
+def krita_rotate_canvas(degrees: float) -> str:
+    """Rotate the whole canvas (all layers), resizing the canvas to fit. degrees: clockwise angle."""
+    result = send_command("rotate_canvas", {"degrees": degrees}, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Canvas rotated by {degrees} degrees"
+
+
+@mcp.tool()
+def krita_shear_canvas(angle_x: float = 0, angle_y: float = 0) -> str:
+    """Shear the whole canvas (all layers). angle_x/angle_y: shear angle in degrees along each axis."""
+    result = send_command("shear_canvas", {"angle_x": angle_x, "angle_y": angle_y}, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Canvas sheared ({angle_x}, {angle_y} degrees)"
 
 
 @mcp.tool()

@@ -721,5 +721,71 @@ def krita_export_layer(path: str, name: Optional[str] = None) -> str:
     return f"Exported layer '{result.get('name')}' to {result.get('path')}"
 
 
+@mcp.tool()
+def krita_create_colorize_mask(
+    key_strokes: list[dict],
+    layer: Optional[str] = None,
+    name: str = "Colorize Mask",
+    edge_detection: bool = False,
+    edge_detection_size: float = 4.0,
+    clean_up_amount: float = 0.0,
+    limit_to_device_bounds: bool = False,
+) -> str:
+    """
+    Create a Colorize Mask on a layer: mark regions of line art with "key stroke" colors and
+    Krita's own lazy-fill segmentation flat-fills every enclosed region in one pass. Better
+    suited to coloring line art than flood_fill — handles every region at once and tolerates
+    small gaps in the linework.
+
+    Args:
+        key_strokes: One entry per fill color:
+            {"color": "#rrggbb", "rects": [[x, y, w, h], ...], "transparent": bool}
+            "rects" mark axis-aligned boxes where that color's key stroke is painted — rough
+            scribble coverage, not an exact outline. Mark at most one entry "transparent": true
+            for a region (e.g. line-art background) that should stay unfilled.
+        layer: Paint layer to attach the mask to (default: the active layer)
+        name: Name for the new mask
+        edge_detection: Snap fill boundaries to nearby line art edges
+        edge_detection_size: Edge search radius in pixels (only applies if edge_detection)
+        clean_up_amount: 0-100, removes small stray fill regions
+        limit_to_device_bounds: Restrict segmentation to the layer's own pixel bounds
+    """
+    result = send_command("create_colorize_mask", {
+        "key_strokes": key_strokes,
+        "layer": layer,
+        "name": name,
+        "edge_detection": edge_detection,
+        "edge_detection_size": edge_detection_size,
+        "clean_up_amount": clean_up_amount,
+        "limit_to_device_bounds": limit_to_device_bounds,
+    }, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Created colorize mask '{result.get('name')}' with {result.get('key_stroke_count')} key strokes"
+
+
+@mcp.tool()
+def krita_update_colorize_mask(mask: str, color: str, rects: list[list[int]], update: bool = True) -> str:
+    """
+    Repaint one key-stroke color's coverage on an existing colorize mask (adds rects for that
+    color) and re-run the fill. The color must already be registered on this mask — i.e. it was
+    one of the key_strokes passed to krita_create_colorize_mask.
+
+    Args:
+        mask: Name of the colorize mask
+        color: Hex color of the key stroke to update — must match one used at creation
+        rects: [[x, y, w, h], ...] regions to mark with this color
+        update: Re-run the fill after writing (default True)
+    """
+    result = send_command("update_colorize_mask", {
+        "mask": mask, "color": color, "rects": rects, "update": update
+    }, timeout=60.0)
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Updated colorize mask '{mask}' key stroke '{color}'"
+
+
 if __name__ == "__main__":
     mcp.run()

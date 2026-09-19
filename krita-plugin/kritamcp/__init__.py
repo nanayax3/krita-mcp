@@ -278,6 +278,10 @@ class KritaMCPExtension(Extension):
                 return self.cmd_flatten_image(params)
             elif action == "export_layer":
                 return self.cmd_export_layer(params)
+            elif action == "create_colorize_mask":
+                return self.cmd_create_colorize_mask(params)
+            elif action == "update_colorize_mask":
+                return self.cmd_update_colorize_mask(params)
             else:
                 return {"error": f"Unknown action: {action}"}
 
@@ -1253,6 +1257,136 @@ class KritaMCPExtension(Extension):
             return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
         node.save(path, doc.xRes(), doc.yRes(), InfoObject())
         return {"status": "ok", "name": node.name(), "path": path}
+
+    def cmd_create_colorize_mask(self, params):
+        """
+        Create a Colorize Mask on a layer: paint "key strokes" of distinct colors over line art
+        and Krita's own lazy-fill segmentation flat-fills every enclosed region in one pass —
+        strictly better than flood_fill for coloring line art (handles every region at once,
+        tolerant of small gaps in the linework).
+
+        Unlike every other pixel-writing command in this file, ColorizeMask.setKeyStrokePixelData
+        writes into an alpha8 (1 byte per pixel = coverage 0-255) paint device internal to the
+        mask, NOT the BGRA format used by setPixelData/pixelData elsewhere — confirmed against
+        Krita's own libs/libkis/ColorizeMask.cpp and libs/libkis/tests/TestDocument.cpp
+        (testCreateColorizeMask), which this implementation's call sequence mirrors: create mask,
+        parent it under the target layer, tune edge-detection/clean-up, initializeKeyStrokeColors
+        ONCE with the full color list, then setKeyStrokePixelData per color/region, then
+        updateMask().
+
+        Confirmed live: white canvas, black square line-art outline, one key stroke inside
+        (filled) and one outside marked transparent (stays empty) — interior filled precisely to
+        the line-art edge with edge_detection=True.
+        """
+        key_strokes = params.get("key_strokes")
+        if not key_strokes:
+            return {"error": "key_strokes must be a non-empty list"}
+
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+
+        layer_name = params.get("layer")
+        target = self.find_node(doc, layer_name) if layer_name else self.get_active_layer()
+        if not target:
+            return {"error": f"Layer not found: {layer_name}" if layer_name else "No active layer"}
+
+        view = self.get_active_view()
+        if not view:
+            return {"error": "No active view"}
+
+        name = params.get("name", "Colorize Mask")
+        mask = doc.createColorizeMask(name)
+        if not mask:
+            return {"error": "Failed to create colorize mask"}
+
+        target.addChildNode(mask, None)
+        mask.setEditKeyStrokes(True)
+        mask.setUseEdgeDetection(bool(params.get("edge_detection", False)))
+        mask.setEdgeDetectionSize(float(params.get("edge_detection_size", 4.0)))
+        mask.setCleanUpAmount(float(params.get("clean_up_amount", 0.0)))
+        mask.setLimitToDeviceBounds(bool(params.get("limit_to_device_bounds", False)))
+
+        managed_colors = []
+        transparent_index = -1
+        for i, ks in enumerate(key_strokes):
+            color_hex = ks.get("color")
+            if not color_hex:
+                return {"error": f"key_strokes[{i}] is missing 'color'"}
+            managed_colors.append(ManagedColor.fromQColor(QColor(color_hex), view.canvas()))
+            if ks.get("transparent"):
+                transparent_index = i
+
+        # Sets the mask's own color space to match its parent layer as a side effect — must run
+        # exactly once, before any setKeyStrokePixelData call (mirrors Krita's own C++ test order).
+        mask.initializeKeyStrokeColors(managed_colors, transparent_index)
+
+        for i, ks in enumerate(key_strokes):
+            color = managed_colors[i]
+            for rect in ks.get("rects", []):
+                if len(rect) != 4:
+                    return {"error": f"key_strokes[{i}].rects entries must be [x, y, w, h]"}
+                x, y, w, h = (int(v) for v in rect)
+                if w <= 0 or h <= 0:
+                    continue
+                coverage = bytes([255]) * (w * h)
+                if not mask.setKeyStrokePixelData(coverage, color, x, y, w, h):
+                    return {"error": f"Failed to write key stroke for key_strokes[{i}]"}
+
+        mask.updateMask(True)
+        mask.setEditKeyStrokes(False)
+        mask.setShowOutput(True)
+        # updateMask() runs the lazy-fill segmentation as an async job on Krita's own image
+        # update scheduler, not on Qt's event loop -- QApplication.processEvents() (used
+        # elsewhere in this file for the setCurrentTime race) does NOT wait for it.
+        # doc.waitForDone() is the actual sync barrier; confirmed against Krita's own
+        # libs/libkis/tests/TestDocument.cpp::testCreateColorizeMask, which calls it in this
+        # exact position (after updateMask()/setShowOutput(), before refreshProjection()).
+        doc.waitForDone()
+        doc.refreshProjection()
+
+        return {"status": "ok", "name": mask.name(), "id": mask.uniqueId().toString(), "key_stroke_count": len(key_strokes)}
+
+    def cmd_update_colorize_mask(self, params):
+        """Repaint one already-registered key-stroke color's coverage on an existing colorize
+        mask (see cmd_create_colorize_mask) and optionally re-run the fill."""
+        mask_name = params.get("mask")
+        color_hex = params.get("color")
+        rects = params.get("rects", [])
+
+        doc = self.get_active_document()
+        if not doc:
+            return {"error": "No active document"}
+
+        mask = self.find_node(doc, mask_name)
+        if not mask or mask.type() != "colorizemask":
+            return {"error": f"Colorize mask not found: {mask_name}"}
+
+        view = self.get_active_view()
+        if not view:
+            return {"error": "No active view"}
+
+        color = ManagedColor.fromQColor(QColor(color_hex), view.canvas())
+        mask.setEditKeyStrokes(True)
+        for rect in rects:
+            if len(rect) != 4:
+                return {"error": "rects entries must be [x, y, w, h]"}
+            x, y, w, h = (int(v) for v in rect)
+            if w <= 0 or h <= 0:
+                continue
+            coverage = bytes([255]) * (w * h)
+            if not mask.setKeyStrokePixelData(coverage, color, x, y, w, h):
+                return {"error": f"Color {color_hex} was not registered on this mask — "
+                                 f"add it via create_colorize_mask's key_strokes first"}
+
+        if params.get("update", True):
+            mask.updateMask(True)
+        mask.setEditKeyStrokes(False)
+        mask.setShowOutput(True)
+        doc.waitForDone()  # see cmd_create_colorize_mask -- updateMask() is an async scheduler job
+        doc.refreshProjection()
+
+        return {"status": "ok", "mask": mask_name, "color": color_hex}
 
 
 # Register the extension

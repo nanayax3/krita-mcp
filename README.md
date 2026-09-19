@@ -138,6 +138,13 @@ If using a virtual environment:
 | `krita_flatten_image` | Flatten all layers |
 | `krita_export_layer` | Export a single layer to an image file |
 
+**Colorize Mask**
+
+| Tool | Description |
+|------|-------------|
+| `krita_create_colorize_mask` | Lazy-fill line art: mark regions with key-stroke colors, Krita segments and flat-fills them in one pass |
+| `krita_update_colorize_mask` | Repaint one key-stroke color's coverage on an existing colorize mask and re-run the fill |
+
 ## The Export Timeout Fix
 
 **This is the main reason this repo exists.**

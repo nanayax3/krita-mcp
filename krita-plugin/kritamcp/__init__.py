@@ -4,9 +4,21 @@ Allows Claude (or any MCP client) to paint by sending commands to this plugin.
 """
 
 from krita import *
-from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QMessageBox
+import pykrita
+
+# Krita 5.x builds embed PyQt5; Krita 6.x builds embed PyQt6, and Krita's own krita/__init__.py
+# actively raises ModuleNotFoundError if a script imports the "wrong" one (see
+# importAvoidWrongPyQtHack there) to avoid loading two conflicting copies of Qt. pykrita itself
+# (the C extension providing plugin-load hooks, already imported by krita/__init__.py before this
+# module runs) exposes qt_major_version() precisely so scripts can branch on this.
+if pykrita.qt_major_version() == 6:
+    from PyQt6.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF
+    from PyQt6.QtGui import QColor
+    from PyQt6.QtWidgets import QMessageBox
+else:
+    from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF
+    from PyQt5.QtGui import QColor
+    from PyQt5.QtWidgets import QMessageBox
 import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler

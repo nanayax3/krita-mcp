@@ -34,6 +34,9 @@ Copy both:
 
 Then in Krita: **Settings → Configure Krita → Python Plugin Manager → Enable "Krita MCP Bridge"** and restart Krita.
 
+Works on both Krita 5.x (PyQt5) and Krita 6.x (PyQt6) builds — the plugin detects which one your
+Krita was built against and imports the matching Qt bindings automatically.
+
 ### 2. Install the MCP Server
 
 ```bash

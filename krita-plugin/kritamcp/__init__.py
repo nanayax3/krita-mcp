@@ -4,9 +4,13 @@ Allows Claude (or any MCP client) to paint by sending commands to this plugin.
 """
 
 from krita import *
-from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QMessageBox
+# Krita 6 uses PyQt6; Krita 5 uses PyQt5. Krita blocks the wrong binding.
+try:
+    from PyQt6.QtCore import QTimer, QThread
+    from PyQt6.QtGui import QColor
+except ImportError:
+    from PyQt5.QtCore import QTimer, QThread
+    from PyQt5.QtGui import QColor
 import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler

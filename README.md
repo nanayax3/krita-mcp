@@ -1,8 +1,19 @@
-# Krita MCP Server
+# Krita MCP Server Qt6 / PyQt6 Compatibility
 
 Let AI paint in [Krita](https://krita.org/) via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
 This bridge allows Claude (or any MCP client) to create canvases, paint strokes, draw shapes, export images, and more — all inside a running Krita instance.
+
+## About This Fork
+
+Based on [nanayax3/krita-mcp](https://github.com/nanayax3/krita-mcp), with a Qt compatibility update prepared by [Badee Sindi](https://github.com/badeesindi).
+
+- Adds PyQt6 imports for Krita 6, with a PyQt5 fallback for Krita 5.
+- Removes unused Qt imports from the plugin.
+- Documents Windows interpreter selection, missing dependencies, and connection checks.
+- Preserves the upstream painting implementation, MCP tools, 120-second export/save timeouts, and MIT license.
+
+The maintainer reported successful connection on Windows after applying this patch and installing the server dependencies on October 1, 2026. Python syntax and simulated import/registration checks passed for both Qt import branches. This is not a claim that every painting tool or both Krita major versions were tested in the real application.
 
 ## How It Works
 
@@ -73,6 +84,55 @@ If using a virtual environment:
   }
 }
 ```
+
+### Windows: Use the Same Python for Installation and Claude
+
+Krita's embedded Python runs the plugin. A separate Python interpreter runs `server.py`; install `fastmcp` and `httpx` into that interpreter, not into Krita's embedded Python.
+
+For an isolated installation, open PowerShell in the downloaded repository folder:
+
+```powershell
+python -m venv .venv
+& ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
+& ".\.venv\Scripts\python.exe" -c "from fastmcp import FastMCP; import httpx; print('READY')"
+```
+
+Use absolute paths in Claude's configuration. For example, if the repository is at `C:\Tools\krita-mcp`:
+
+```json
+{
+  "mcpServers": {
+    "krita": {
+      "command": "C:\\Tools\\krita-mcp\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\Tools\\krita-mcp\\server.py"]
+    }
+  }
+}
+```
+
+Replace these example paths with your actual installation paths. Merge the `krita` entry into your existing configuration without removing other servers or preferences. `server.py` is at the repository root; the `kritamcp` plugin folder contains `__init__.py`, not `server.py`. If you choose to store the server elsewhere, point `args` at its actual location.
+
+Fully quit and reopen Claude after changing the configuration.
+
+### Verify the Connection
+
+1. Restart Krita after copying/enabling the plugin.
+2. Open `http://localhost:5678/health` in your browser. Expected response: `{"status": "ok", "plugin": "kritamcp"}`. This checks the plugin's HTTP listener, not every painting operation.
+3. Start Claude and ask it to run `krita_health`.
+4. Ask it to create a small test canvas to verify command execution.
+
+### Troubleshooting
+
+| Symptom | Cause or next check |
+|---------|---------------------|
+| Plugin is grayed out | Hover over its name in Python Plugin Manager to see the import error. |
+| `This version of Krita is not compatible with PyQt5!` | Replace the plugin's `__init__.py` with this fork's version, then restart Krita. Do not install PyQt5 into a Qt6-based Krita. |
+| `can't open file ... server.py` | Correct `args` to the actual absolute path of `server.py`. |
+| `No module named 'fastmcp'` or `'httpx'` | Run `-m pip install -r requirements.txt` using the exact Python executable configured in `command`. |
+| Claude reports `Server disconnected` | Inspect its MCP logs for the underlying exception. This message alone does not identify a Krita plugin problem. |
+| Health URL is unreachable | Check that Krita is running, the plugin loaded, and port 5678 is available. |
+
+Do not publish your personal `claude_desktop_config.json`, logs, or generated `.pyc` files. Use the generic example above for shared setup instructions.
 
 ## Available Tools
 

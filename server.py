@@ -13,8 +13,18 @@ from typing import Optional
 
 # Configuration
 KRITA_URL = os.environ.get("KRITA_URL", "http://localhost:5678")
+TOKEN_PATH = os.environ.get("KRITA_MCP_TOKEN_FILE", os.path.expanduser("~/.krita-mcp-token"))
 
 mcp = FastMCP("krita-mcp")
+
+
+def read_token() -> str:
+    """Shared secret written by the Krita plugin when it starts (see README, Security)."""
+    try:
+        with open(TOKEN_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 
 def send_command(action: str, params: dict = None, timeout: float = 30.0) -> dict:
@@ -26,6 +36,7 @@ def send_command(action: str, params: dict = None, timeout: float = 30.0) -> dic
         response = httpx.post(
             KRITA_URL,
             json={"action": action, "params": params},
+            headers={"X-Krita-Token": read_token()},
             timeout=timeout
         )
         return response.json()

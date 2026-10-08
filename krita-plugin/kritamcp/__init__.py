@@ -7,7 +7,9 @@ from krita import *
 from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QMessageBox
+import hmac
 import json
+import secrets
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -16,6 +18,56 @@ import os
 # Configuration - customize these as needed
 SERVER_PORT = 5678
 CANVAS_OUTPUT_DIR = os.path.expanduser("~/krita-mcp-output")
+
+# The HTTP server only answers requests that carry a shared secret. Without it, any web page open in
+# your browser could send commands to http://localhost:5678 (save to any path, open any file, paint...).
+TOKEN_PATH = os.environ.get("KRITA_MCP_TOKEN_FILE", os.path.expanduser("~/.krita-mcp-token"))
+ALLOWED_HOSTS = {f"localhost:{SERVER_PORT}", f"127.0.0.1:{SERVER_PORT}"}
+
+
+def load_token():
+    """Return the shared secret, creating the token file on first start.
+
+    On Linux / macOS the file is made readable by its owner only. On Windows the mode is ignored and the file
+    keeps the permissions of the user profile folder it lives in.
+    """
+    try:
+        with open(TOKEN_PATH, encoding="utf-8") as f:
+            token = f.read().strip()
+        if token:
+            return token
+    except OSError:
+        pass
+    token = secrets.token_hex(24)
+    fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(token)
+    try:
+        os.chmod(TOKEN_PATH, 0o600)  # also tightens a file that existed but was empty
+    except OSError:
+        pass
+    return token
+
+
+AUTH_TOKEN = load_token()
+
+
+def is_authorized(headers):
+    """Check a request. Returns (ok, reason).
+
+    - Browsers always add an Origin header to cross-site POSTs, MCP clients never do: reject any request that has one.
+    - The Host header must be the local address (blocks DNS rebinding).
+    - The X-Krita-Token header must match the shared secret (a custom header also forces a CORS preflight).
+    """
+    if headers.get("Origin") is not None:
+        return False, "requests from web pages are not allowed"
+    if headers.get("Host", "").lower() not in ALLOWED_HOSTS:
+        return False, "unexpected Host header"
+    supplied = headers.get("X-Krita-Token", "")
+    if not hmac.compare_digest(supplied.encode("utf-8"), AUTH_TOKEN.encode("utf-8")):
+        return False, "missing or invalid token"
+    return True, ""
+
 
 class CommandQueue:
     """Thread-safe command queue for passing commands from HTTP thread to main thread."""
@@ -82,6 +134,10 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == '/health':
             self.send_json_response({"status": "ok", "plugin": "kritamcp"})
         elif parsed.path == '/info':
+            ok, reason = is_authorized(self.headers)
+            if not ok:
+                self.send_json_response({"error": reason}, 403)
+                return
             self.send_json_response({
                 "status": "ok",
                 "canvas_dir": CANVAS_OUTPUT_DIR,
@@ -100,6 +156,13 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
 
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8')
+
+        # Checked after reading the body: answering before it is fully read makes the client see a reset
+        # connection instead of the 403 message.
+        ok, reason = is_authorized(self.headers)
+        if not ok:
+            self.send_json_response({"error": reason}, 403)
+            return
 
         try:
             command = json.loads(body)

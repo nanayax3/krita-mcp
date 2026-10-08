@@ -93,6 +93,23 @@ If using a virtual environment:
 | `krita_list_brushes` | List available brush presets |
 | `krita_open_file` | Open an existing .kra, .png, .jpg, etc. |
 
+## Security
+
+The plugin opens an HTTP server on `localhost:5678`. To keep other programs and **web pages open in your browser**
+from sending commands to it (for example saving an image to any path or opening any file), every request must carry
+a shared secret:
+
+- When Krita starts, the plugin creates `~/.krita-mcp-token` if it does not exist yet (readable by its owner only on
+  Linux / macOS; on Windows it keeps the permissions of your user profile folder).
+- `server.py` reads that file and sends its content in the `X-Krita-Token` header. Nothing to configure.
+- Requests with an `Origin` header (what browsers add to cross-site requests), with a `Host` other than
+  `localhost` / `127.0.0.1`, or with a missing or wrong token get `403`. `/health` stays open (status only).
+- Use `KRITA_MCP_TOKEN_FILE` (plugin and server) to put the token file somewhere else.
+- Writing your own client? Send `X-Krita-Token: <content of the token file>` with every command.
+
+After updating, restart Krita (to load the new plugin) and your MCP client (to load the new `server.py`).
+`server.py` reads the token file on every request, so the start order does not matter.
+
 ## The Export Timeout Fix
 
 **This is the main reason this repo exists.**

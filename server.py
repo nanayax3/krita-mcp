@@ -17,15 +17,24 @@ KRITA_URL = os.environ.get("KRITA_URL", "http://localhost:5678")
 mcp = FastMCP("krita-mcp")
 
 
-def send_command(action: str, params: dict = None, timeout: float = 30.0) -> dict:
-    """Send command to Krita plugin and return result."""
+def send_command(action: str, params: dict = None, timeout: float = 30.0,
+                 plugin_timeout: Optional[float] = None) -> dict:
+    """Send command to Krita plugin and return result.
+
+    plugin_timeout asks the plugin to wait longer than its 120s default
+    for the command to finish (keep `timeout` a bit above it).
+    """
     if params is None:
         params = {}
+
+    body = {"action": action, "params": params}
+    if plugin_timeout is not None:
+        body["timeout"] = plugin_timeout
 
     try:
         response = httpx.post(
             KRITA_URL,
-            json={"action": action, "params": params},
+            json=body,
             timeout=timeout
         )
         return response.json()
@@ -325,6 +334,40 @@ def krita_open_file(path: str) -> str:
         return f"Error: {result['error']}"
 
     return f"Opened: {result.get('name', 'unknown')} ({result.get('width')}x{result.get('height')})"
+
+
+@mcp.tool()
+def krita_import_animation(
+    folder: str,
+    fps: int = 24,
+    name: str = "",
+    lock_reference: bool = True,
+) -> str:
+    """
+    Import a folder of image frames as an animation in a new Krita document.
+
+    Frames are sorted by filename and placed one per frame on a "Reference"
+    layer; a blank "Drawing" layer is added on top for drawing over. The
+    document frame rate and playback range are set to match.
+
+    Args:
+        folder: Folder containing the frames (png, jpg, tif, webp, exr...)
+        fps: Playback frame rate
+        name: Document name (defaults to the folder name)
+        lock_reference: Lock the reference layer so it can't be painted on
+    """
+    result = send_command(
+        "import_animation",
+        {"folder": folder, "fps": fps, "name": name, "lock_reference": lock_reference},
+        timeout=910.0,
+        plugin_timeout=900,
+    )
+
+    if "error" in result:
+        return f"Error: {result['error']}"
+
+    return (f"Imported {result.get('frames')} frames at {result.get('fps')} fps "
+            f"into '{result.get('name')}' ({result.get('width')}x{result.get('height')})")
 
 
 if __name__ == "__main__":

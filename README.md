@@ -92,6 +92,7 @@ If using a virtual environment:
 | `krita_get_color_at` | Eyedropper — sample color at a pixel |
 | `krita_list_brushes` | List available brush presets |
 | `krita_open_file` | Open an existing .kra, .png, .jpg, etc. |
+| `krita_import_animation` | Import a folder of image frames as an animation (sets fps/range, adds a Drawing layer on top) |
 
 ## The Export Timeout Fix
 

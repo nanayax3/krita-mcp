@@ -6,7 +6,7 @@ Allows Claude (or any MCP client) to paint by sending commands to this plugin.
 from krita import *
 from PyQt5.QtCore import QTimer, QThread, pyqtSignal, QPointF, QRectF
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QMessageBox, QApplication
 import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -88,7 +88,8 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
                 "commands": [
                     "new_canvas", "set_color", "set_brush", "stroke",
                     "fill", "draw_shape", "get_canvas", "undo", "redo",
-                    "clear", "save", "get_color_at", "list_brushes"
+                    "clear", "save", "get_color_at", "list_brushes",
+                    "open_file", "import_animation"
                 ]
             })
         else:
@@ -112,8 +113,10 @@ class PaintRequestHandler(BaseHTTPRequestHandler):
         command_id = command_counter
         command_queue.push(command_id, command)
 
-        # Wait for result from main thread
-        result = command_queue.get_result(command_id)
+        # Wait for result from main thread (long jobs like animation import
+        # may request a longer timeout)
+        timeout = command.get("timeout", 120)
+        result = command_queue.get_result(command_id, timeout=timeout)
 
         if "error" in result:
             self.send_json_response(result, 500)
@@ -213,6 +216,8 @@ class KritaMCPExtension(Extension):
                 return self.cmd_list_brushes(params)
             elif action == "open_file":
                 return self.cmd_open_file(params)
+            elif action == "import_animation":
+                return self.cmd_import_animation(params)
             else:
                 return {"error": f"Unknown action: {action}"}
 
@@ -745,6 +750,76 @@ class KritaMCPExtension(Extension):
             window.addView(doc)
 
         return {"status": "ok", "path": filepath, "name": doc.name(), "width": doc.width(), "height": doc.height()}
+
+    def cmd_import_animation(self, params):
+        """Create a new animated document from a folder of image frames."""
+        from PyQt5.QtGui import QImageReader
+
+        folder = params.get("folder")
+        if not folder or not os.path.isdir(folder):
+            return {"error": f"Folder not found: {folder}"}
+
+        fps = int(params.get("fps", 24))
+        exts = ('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.webp', '.bmp', '.exr')
+        files = sorted(
+            os.path.join(folder, f) for f in os.listdir(folder)
+            if f.lower().endswith(exts)
+        )
+        if not files:
+            return {"error": f"No image frames found in {folder}"}
+
+        width = params.get("width")
+        height = params.get("height")
+        if not (width and height):
+            size = QImageReader(files[0]).size()
+            if not size.isValid():
+                return {"error": "Could not read frame size; pass width and height"}
+            width, height = size.width(), size.height()
+
+        name = params.get("name") or os.path.basename(os.path.normpath(folder))
+        last = len(files) - 1
+
+        app = Krita.instance()
+        doc = app.createDocument(width, height, name, "RGBA", "U8", "", 72.0)
+        window = app.activeWindow()
+        if window:
+            window.addView(doc)
+
+        root = doc.rootNode()
+        before = set(n.uniqueId().toString() for n in root.childNodes())
+
+        # Import first and let Krita finish before touching the timeline;
+        # changing the clip range/current time mid-import trips an internal
+        # assert ("m_frames.contains(frameID)") and crashes Krita.
+        doc.waitForDone()
+        if not doc.importAnimation(files, 0, 1):
+            return {"error": "Krita failed to import the frames"}
+        doc.waitForDone()
+        QApplication.processEvents()
+
+        doc.setFramesPerSecond(fps)
+        doc.setFullClipRangeStartTime(0)
+        doc.setFullClipRangeEndTime(last)
+        doc.setPlayBackRange(0, last)
+        doc.waitForDone()
+
+        ref = None
+        for n in root.childNodes():
+            if n.uniqueId().toString() not in before:
+                ref = n
+        if ref is not None:
+            ref.setName("Reference")
+            ref.setLocked(params.get("lock_reference", True))
+
+        # Drawing layer on top for drawing over the reference
+        draw = doc.createNode("Drawing", "paintlayer")
+        top = root.childNodes()[-1]
+        root.addChildNode(draw, top)
+        doc.setActiveNode(draw)
+        doc.waitForDone()
+
+        return {"status": "ok", "name": name, "frames": len(files), "fps": fps,
+                "width": width, "height": height}
 
 
 # Register the extension
